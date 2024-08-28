@@ -1,5 +1,10 @@
+import 'dart:io';
+
+import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
+import 'package:permission_handler/permission_handler.dart';
 import 'package:photo_manager/photo_manager.dart';
+import 'package:test_flutter/services/photo_service.dart';
 
 class LocalPhotosScreen extends StatefulWidget {
   const LocalPhotosScreen({super.key});
@@ -16,7 +21,24 @@ class _LocalPhotosScreenState extends State<LocalPhotosScreen> {
   @override
   void initState() {
     super.initState();
-    _loadImages();
+    _requestPermissions();
+  }
+
+  Future<void> _requestPermissions() async {
+    final statuses = await [
+      Permission.storage,
+      Permission.manageExternalStorage,
+    ].request();
+
+    if (statuses[Permission.storage]!.isDenied ||
+        statuses[Permission.manageExternalStorage]!.isDenied) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+            content: Text('Storage permissions are required to access files.')),
+      );
+    } else {
+      _loadImages();
+    }
   }
 
   Future<void> _loadImages() async {
@@ -68,7 +90,8 @@ class _LocalPhotosScreenState extends State<LocalPhotosScreen> {
 
   Future<void> _editAlbum() async {
     if (_selectedAlbum != null) {
-      String? newAlbumName = await _showAlbumDialog('Edit Album', initialValue: _selectedAlbum!.name);
+      String? newAlbumName = await _showAlbumDialog('Edit Album',
+          initialValue: _selectedAlbum!.name);
       if (newAlbumName != null) {
         setState(() {
           _loadImages();
@@ -77,8 +100,30 @@ class _LocalPhotosScreenState extends State<LocalPhotosScreen> {
     }
   }
 
+  Future<void> _uploadPhoto() async {
+    final result = await FilePicker.platform.pickFiles(
+      type: FileType.image,
+    );
+
+    if (result != null) {
+      final file = File(result.files.single.path!);
+      final photosService = PhotosService();
+      try {
+        await photosService.upload(file);
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Photo uploaded successfully!')),
+        );
+      } catch (e) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Failed to upload photo: $e')),
+        );
+      }
+    }
+  }
+
   Future<String?> _showAlbumDialog(String title, {String? initialValue}) async {
-    final TextEditingController controller = TextEditingController(text: initialValue);
+    final TextEditingController controller =
+        TextEditingController(text: initialValue);
     return showDialog<String>(
       context: context,
       builder: (context) {
@@ -125,12 +170,28 @@ class _LocalPhotosScreenState extends State<LocalPhotosScreen> {
     );
   }
 
+  void _viewImage(AssetEntity image) async {
+    final data = await image.file;
+    if (data != null) {
+      Navigator.push(
+        context,
+        MaterialPageRoute(
+          builder: (context) => FullScreenImage(imageFile: data),
+        ),
+      );
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
         title: const Text('Local Photos'),
         actions: [
+          IconButton(
+            icon: const Icon(Icons.upload),
+            onPressed: _uploadPhoto,
+          ),
           PopupMenuButton<String>(
             onSelected: (value) {
               switch (value) {
@@ -160,28 +221,58 @@ class _LocalPhotosScreenState extends State<LocalPhotosScreen> {
               ),
               itemCount: _imageFiles!.length,
               itemBuilder: (context, index) {
-                return FutureBuilder<Widget>(
-                  future: _imageFiles![index].thumbnailDataWithSize(
-                    const ThumbnailSize(200, 200),
-                  ).then((data) {
-                    return data != null ? Image.memory(
-                      data,
-                      fit: BoxFit.cover,
-                    ) : Container(color: Colors.grey);
-                  }),
-                  builder: (context, snapshot) {
-                    if (snapshot.connectionState == ConnectionState.done) {
-                      return snapshot.data!;
-                    } else {
-                      return const Center(child: CircularProgressIndicator());
-                    }
-                  },
+                return GestureDetector(
+                  onTap: () => _viewImage(_imageFiles![index]),
+                  child: FutureBuilder<Widget>(
+                    future: _imageFiles![index]
+                        .thumbnailDataWithSize(
+                      const ThumbnailSize(200, 200),
+                    )
+                        .then((data) {
+                      return data != null
+                          ? Image.memory(
+                              data,
+                              fit: BoxFit.cover,
+                            )
+                          : Container(color: Colors.grey);
+                    }),
+                    builder: (context, snapshot) {
+                      if (snapshot.connectionState == ConnectionState.done) {
+                        return snapshot.data!;
+                      } else {
+                        return const Center(child: CircularProgressIndicator());
+                      }
+                    },
+                  ),
                 );
               },
             )
           : const Center(
               child: CircularProgressIndicator(),
             ),
+    );
+  }
+}
+
+class FullScreenImage extends StatelessWidget {
+  final File imageFile;
+
+  const FullScreenImage({super.key, required this.imageFile});
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(
+        title: const Text('View Image'),
+        backgroundColor: Colors.black,
+        iconTheme: const IconThemeData(color: Colors.white),
+      ),
+      backgroundColor: Colors.black,
+      body: Center(
+        child: InteractiveViewer(
+          child: Image.file(imageFile),
+        ),
+      ),
     );
   }
 }
